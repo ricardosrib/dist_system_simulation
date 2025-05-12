@@ -1,6 +1,6 @@
 // Ring election
 
-// Defined rule: The leader is always the process with the smallest ID.
+// Defined rule: The leader is always the process with the greatest ID.
 
 package main
 
@@ -13,6 +13,7 @@ type mensagem struct {
 	tipo         int
 	corpo        [4]int
 	actualLeader int
+	startPoint   int
 }
 
 var (
@@ -26,16 +27,16 @@ var (
 	wg       sync.WaitGroup
 )
 
-func OrderControl(temp mensagem, tipoMsg int, canal int, in chan int) {
+func ControlerOrder(temp mensagem, tipoMsg int, nProcess, nCanal int, in chan int) {
 	temp.tipo = tipoMsg
-	chans[canal] <- temp
+	chans[nCanal] <- temp
 
 	if tipoMsg == 2 {
-		fmt.Printf("Controle: mudar o processo 0 para falho\n")
+		fmt.Printf("Controle: mudar o processo %d para falho\n", nProcess)
 		fmt.Printf("Controle: confirmação %d\n", <-in)
 	}
 	if tipoMsg == 3 {
-		fmt.Printf("Controle: mudar o processo 1 para ativo\n")
+		fmt.Printf("Controle: mudar o processo %d para ativo\n", nProcess)
 		fmt.Printf("Controle: confirmação %d\n", <-in)
 	}
 }
@@ -45,49 +46,30 @@ func ElectionControler(in chan int) {
 
 	var temp mensagem
 
-	// líder inicial é o processo 0
-	temp.actualLeader = 0
+	// SIMULAÇÃO
 
-	// mudar o processo 0 - canal de entrada 3 - para falho
-	OrderControl(temp, 2, 3, in)
+	// líder inicial é o processo 3 (maior ID entre todos processos)
+	temp.actualLeader = 3
 
-	// mudar o processo 1 - canal de entrada 0 - para falho
-	OrderControl(temp, 2, 0, in)
-
-	// matar os outros processos com mensagens não conhecidas (só pra consumir a leitura)
-	// OrderControl(temp, 9, 1, in)
-	// OrderControl(temp, 9, 2, in)
-
-	// processo 2 dispara eleição
-	OrderControl(temp, 1, 1, in)
-
-	// controle espera pelo resultado da eleição
-	for {
-		result := <-in
-		fmt.Printf("Controle: resultado da eleição recebido. Novo líder é o processo %d.\n", result)
-		temp.actualLeader = result
-		break
-	}
-
-	// mudar o processo 1 - canal de entrada 0 - para ativo
-	OrderControl(temp, 3, 0, in)
-
-	// processo 1 dispara eleição
-	OrderControl(temp, 1, 0, in)
-
-	// controle espera pelo resultado da eleição
-	for {
-		result := <-in
-		fmt.Printf("Controle: resultado da eleição recebido. Novo líder é o processo %d.\n", result)
-		temp.actualLeader = result
-		break
-	}
-
-	// mudar o processo 0 - canal de entrada 3 - para ativo
-	OrderControl(temp, 3, 3, in)
+	// mudar o processo 3 - canal de entrada 2 - para falho
+	ControlerOrder(temp, 2, 3, 2, in)
 
 	// processo 0 dispara eleição
-	OrderControl(temp, 1, 3, in)
+	ControlerOrder(temp, 1, 0, 3, in)
+
+	// controle espera pelo resultado da eleição
+	for {
+		result := <-in
+		fmt.Printf("Controle: resultado da eleição recebido. Novo líder é o processo %d.\n", result)
+		temp.actualLeader = result
+		break
+	}
+
+	// mudar o processo 3 - canal de entrada 2 - para ativo
+	ControlerOrder(temp, 3, 3, 2, in)
+
+	// processo 3 dispara eleição
+	ControlerOrder(temp, 1, 3, 2, in)
 
 	// controle espera pelo resultado da eleição
 	for {
@@ -99,6 +81,7 @@ func ElectionControler(in chan int) {
 
 	fmt.Println("\n   Processo controlador concluído.")
 	fmt.Println("\n   Finalizando demais processos.\n")
+
 	temp.tipo = 6
 	chans[3] <- temp
 	chans[2] <- temp
@@ -121,6 +104,7 @@ func ElectionStage(TaskId int, in chan mensagem, out chan mensagem, leader int) 
 			temp.tipo = 4
 			temp.corpo = [4]int{-1, -1, -1, -1}
 			temp.corpo[TaskId] = TaskId
+			temp.startPoint = TaskId
 			fmt.Printf("%2d: voto registrado.\n", TaskId)
 			fmt.Printf("%2d: enviando mensagem de votação (tipo 4) para o processo seguinte.\n", TaskId)
 			out <- temp
@@ -150,21 +134,21 @@ func ElectionStage(TaskId int, in chan mensagem, out chan mensagem, leader int) 
 			}
 
 			// condição pra detectar quando fechar o ciclo da eleição
-			if temp.corpo[TaskId] != -1 {
-				minID := 1000
+			if temp.startPoint == TaskId {
+				maxID := -1
 				for _, id := range temp.corpo {
-					if id < minID && id >= 0 {
-						minID = id
+					if id > maxID && id >= 0 {
+						maxID = id
 					}
 				}
-				fmt.Printf("%2d: Fim da eleição. Novo líder é o processo %d\n", TaskId, minID)
-				actualLeader = minID
+				fmt.Printf("%2d: Fim da eleição. Novo líder é o processo %d\n", TaskId, maxID)
+				actualLeader = maxID
 
 				// informa os demais processos do resultado da eleição
 				fmt.Printf("%2d: enviando mensagem de resultado (tipo 5) para o processo seguinte.\n", TaskId)
 				temp.tipo = 5
 				temp.corpo = [4]int{-1, -1, -1, -1}
-				temp.actualLeader = minID
+				temp.actualLeader = maxID
 				out <- temp
 
 			} else {
@@ -174,8 +158,9 @@ func ElectionStage(TaskId int, in chan mensagem, out chan mensagem, leader int) 
 				out <- temp
 			}
 		case 5:
-			if TaskId == temp.actualLeader {
+			if temp.startPoint == TaskId {
 				fmt.Printf("%2d: confirmo que todos os processos ativos do anel conhecem o novo líder. Finalizando eleição.\n", TaskId)
+				temp.startPoint = -1
 				fmt.Printf("%2d: informando controle sobre o resultado da eleição.\n", TaskId)
 				controle <- temp.actualLeader
 			} else {
